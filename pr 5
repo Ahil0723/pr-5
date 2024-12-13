@@ -1,0 +1,120 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pwd.h>
+#include <sys/types.h>
+#include <errno.h>
+
+void show_help() {
+    printf("Использование: ./my_console_utility [OPTIONS]\n");
+    printf("OPTIONS:\n");
+    printf("  -u, --users          Вывести перечень пользователей и их домашних директорий.\n");
+    printf("  -p, --processes      Вывести перечень запущенных процессов.\n");
+    printf("  -h, --help           Показать справку.\n");
+    printf("  -l PATH, --log PATH  Записать вывод в файл по заданному пути.\n");
+    printf("  -e PATH, --errors PATH Записать ошибки в файл по заданному пути.\n");
+}
+
+void log_error(const char *message, FILE *error_file) {
+    if (error_file) {
+        fprintf(error_file, "%s\n", message);
+    }
+}
+
+void list_users(FILE *log_file, FILE *error_file) {
+    struct passwd *pw;
+    while ((pw = getpwent()) != NULL) {
+        if (pw->pw_uid >= 1000) {
+            if (log_file) {
+                fprintf(log_file, "%s\t%s\n", pw->pw_name, pw->pw_dir);
+            } else {
+                printf("%s\t%s\n", pw->pw_name, pw->pw_dir);
+            }
+        }
+    }
+    endpwent();
+    
+    if (ferror(stdout)) {
+        log_error("Ошибка при получении списка пользователей.", error_file);
+    }
+}
+
+void list_processes(FILE *log_file, FILE *error_file) {
+    FILE *fp = popen("ps aux --sort pid", "r");
+    if (fp == NULL) {
+        log_error("Ошибка при получении списка процессов.", error_file);
+        return;
+    }
+
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        if (log_file) {
+            fprintf(log_file, "%s", buffer);
+        } else {
+            printf("%s", buffer);
+        }
+    }
+    
+    if (pclose(fp) == -1) {
+        log_error("Ошибка при завершении команды ps.", error_file);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    FILE *log_file = NULL;
+    FILE *error_file = NULL;
+    int opt;
+    char *action = NULL;
+
+    while ((opt = getopt(argc, argv, "upl:he:")) != -1) {
+        switch (opt) {
+            case 'u':
+                action = "users";
+                break;
+            case 'p':
+                action = "processes";
+                break;
+            case 'l':
+                log_file = fopen(optarg, "w");
+                if (!log_file) {
+                    perror("Ошибка открытия лог-файла");
+                    return EXIT_FAILURE;
+                }
+                break;
+            case 'e':
+                error_file = fopen(optarg, "a");
+                if (!error_file) {
+                    perror("Ошибка открытия файла ошибок");
+                    return EXIT_FAILURE;
+                }
+                break;
+            case 'h':
+                show_help();
+                return EXIT_SUCCESS;
+            default:
+                fprintf(stderr, "Неизвестный параметр -%c\n", optopt);
+                log_error("Неизвестный параметр.", error_file);
+                return EXIT_FAILURE;
+        }
+    }
+
+    if (!action) {
+        fprintf(stderr, "Ошибка, действие не задано.\n");
+        log_error("Ошибка, действие не задано.", error_file);
+        return EXIT_FAILURE;
+    }
+
+    // Выполнение соответствующего действия
+    if (strcmp(action, "users") == 0) {
+        list_users(log_file, error_file);
+    } else if (strcmp(action, "processes") == 0) {
+        list_processes(log_file, error_file);
+    }
+
+    // Закрытие файлов
+    if (log_file) fclose(log_file);
+    if (error_file) fclose(error_file);
+
+    return EXIT_SUCCESS;
+}
